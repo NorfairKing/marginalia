@@ -1,0 +1,9 @@
+The following checks were found near changed code.
+Each check shows what changed, where to look, and what to check.
+
+---
+
+src/config.rs:6 changed (in const MAX_RETRIES)
+check src/config.rs:6
+
+This constant must match the server config

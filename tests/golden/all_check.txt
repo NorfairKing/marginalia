@@ -1,0 +1,11 @@
+The following checks were found near changed code.
+Each check shows what changed, where to look, and what to check.
+
+---
+
+changed (matching src/**/*.rs):
+  src/auth.rs:42-48
+  src/lib.rs:5-10
+check README.md
+
+Make sure the README examples still compile

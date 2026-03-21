@@ -1,0 +1,25 @@
+The following checks were found near changed code.
+Each check shows what changed, where to look, and what to check.
+
+---
+
+src/auth.rs:45-46 changed (in fn parse_token)
+check src/auth.rs:42-48
+
+Verify this unwrap is safe
+
+
+---
+
+src/auth.rs:45-46 changed
+check src/auth.rs entirely
+
+Every handler must check permissions
+
+
+---
+
+src/auth.rs:45-46 changed (matching src/**/*.rs)
+check README.md
+
+Make sure the README examples still compile

@@ -1,0 +1,9 @@
+The following checks were found near changed code.
+Each check shows what changed, where to look, and what to check.
+
+---
+
+src/api.rs:15-20,38 changed
+check src/api.rs entirely
+
+Every handler must check permissions

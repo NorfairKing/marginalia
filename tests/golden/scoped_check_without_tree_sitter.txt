@@ -1,0 +1,9 @@
+The following checks were found near changed code.
+Each check shows what changed, where to look, and what to check.
+
+---
+
+src/auth.rs:45-46 changed
+check src/auth.rs:42
+
+Verify this unwrap is safe

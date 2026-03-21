@@ -1,0 +1,12 @@
+The following checks were found near changed code.
+Each check shows what changed, where to look, and what to check.
+
+---
+
+src/access.rs:12-14 changed (in fn check_access)
+check src/access.rs:10-25
+
+Make sure this function handles all three cases:
+1. User has no subscription
+2. User has an expired subscription
+3. User has a valid subscription but rate-limited
