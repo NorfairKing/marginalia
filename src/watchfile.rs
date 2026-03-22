@@ -2,12 +2,41 @@ use crate::annotations::{Annotation, CheckKind};
 use regex::Regex;
 use std::sync::LazyLock;
 
+/// Configuration extracted from a `.marginalia` file.
+#[derive(Debug, Default)]
+pub struct Config {
+    /// The base branch to diff against.
+    pub base: Option<String>,
+}
+
+/// Parse configuration directives from a `.marginalia` file.
+///
+/// Currently supports:
+/// ```text
+/// base: development
+/// ```
+pub fn parse_config(content: &str) -> Config {
+    let mut config = Config::default();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("base:") {
+            let value = value.trim();
+            if !value.is_empty() {
+                config.base = Some(value.to_string());
+            }
+        }
+    }
+    config
+}
+
 /// Parse a `.marginalia` file into annotations.
 ///
 /// Syntax:
 /// ```text
 /// # Lines starting with # are comments.
 /// # Blank lines are ignored.
+///
+/// base: development
 ///
 /// when src/**/*.rs changes:
 ///   Make sure the README examples still compile.
@@ -20,6 +49,8 @@ use std::sync::LazyLock;
 /// A `when <pattern> changes:` line starts a rule. Subsequent indented
 /// lines form the description. The description ends at a blank line,
 /// a new `when` line, or end of file.
+///
+/// The `base:` directive is handled by `parse_config` and skipped here.
 pub fn parse_watchfile(content: &str, file_path: &str) -> Vec<Annotation> {
     let mut annotations = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
@@ -29,7 +60,7 @@ pub fn parse_watchfile(content: &str, file_path: &str) -> Vec<Annotation> {
         let line = lines[i];
         let trimmed = line.trim();
 
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("base:") {
             i += 1;
             continue;
         }
@@ -166,5 +197,42 @@ when *.proto changes:
         let anns = parse_watchfile(content, ".marginalia");
         assert_eq!(anns.len(), 1);
         assert_eq!(anns[0].description, "");
+    }
+
+    #[test]
+    fn config_base_branch() {
+        let content = "base: development\n";
+        let config = parse_config(content);
+        assert_eq!(config.base, Some("development".to_string()));
+    }
+
+    #[test]
+    fn config_base_branch_with_rules() {
+        let content = "\
+base: development
+
+when src/**/*.rs changes:
+  Update examples.
+";
+        let config = parse_config(content);
+        assert_eq!(config.base, Some("development".to_string()));
+        let anns = parse_watchfile(content, ".marginalia");
+        assert_eq!(anns.len(), 1);
+    }
+
+    #[test]
+    fn config_no_base() {
+        let content = "\
+when src/**/*.rs changes:
+  Update examples.
+";
+        let config = parse_config(content);
+        assert_eq!(config.base, None);
+    }
+
+    #[test]
+    fn config_empty() {
+        let config = parse_config("");
+        assert_eq!(config.base, None);
     }
 }

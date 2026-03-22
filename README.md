@@ -83,6 +83,8 @@ or when you just want cross-file rules in one place, put them in a
 ```
 # Lines starting with # are comments.
 
+base: development
+
 when static/logo.png changes:
   Open the landing page and check it looks right.
 
@@ -92,6 +94,13 @@ when db/migrations/** changes:
 
 A `when <pattern> changes:` line starts a rule. Indented lines that
 follow are the description. Lines starting with `#` are comments.
+
+The `base:` directive sets the base branch to diff against. Without
+it, marginalia auto-detects the base branch by checking the remote
+default branch (`refs/remotes/origin/HEAD`), then trying `main` and
+`master`. If none are found, it falls back to diffing against HEAD
+(showing only uncommitted changes). You can always override with
+`--base <branch>` on the command line.
 
 ### Description syntax
 

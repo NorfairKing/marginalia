@@ -35,35 +35,46 @@ pub fn changed_files(repo_path: &Path, base_branch: &str) -> Result<Vec<ChangedF
         .peel_to_commit()
         .map_err(|e| format!("failed to peel HEAD to commit: {}", e))?;
 
-    let merge_base = repo
-        .merge_base(base_commit.id(), head_commit.id())
-        .map_err(|e| format!("failed to find merge base: {}", e))?;
+    // When the base is the same commit as HEAD, diff HEAD against the
+    // working directory (staged + unstaged changes only).
+    let base_is_head = base_commit.id() == head_commit.id();
 
-    let merge_base_commit = repo
-        .find_commit(merge_base)
-        .map_err(|e| format!("failed to find merge base commit: {}", e))?;
+    let base_tree = if base_is_head {
+        head_commit
+            .tree()
+            .map_err(|e| format!("failed to get HEAD tree: {}", e))?
+    } else {
+        let merge_base = repo
+            .merge_base(base_commit.id(), head_commit.id())
+            .map_err(|e| format!("failed to find merge base: {}", e))?;
+        let merge_base_commit = repo
+            .find_commit(merge_base)
+            .map_err(|e| format!("failed to find merge base commit: {}", e))?;
+        merge_base_commit
+            .tree()
+            .map_err(|e| format!("failed to get base tree: {}", e))?
+    };
 
-    let base_tree = merge_base_commit
-        .tree()
-        .map_err(|e| format!("failed to get base tree: {}", e))?;
-
-    // Diff the merge base against the working directory (includes both
-    // committed, staged, and unstaged changes).
+    // Diff the base tree against the working directory (includes both
+    // staged and unstaged changes).
     let mut opts = DiffOptions::new();
     let mut diff = repo
         .diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut opts))
         .map_err(|e| format!("failed to compute diff: {}", e))?;
 
-    // Also include committed changes between merge base and HEAD, in case
-    // the working directory is clean but the branch has commits.
-    let head_tree = head_commit
-        .tree()
-        .map_err(|e| format!("failed to get HEAD tree: {}", e))?;
-    let committed_diff = repo
-        .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)
-        .map_err(|e| format!("failed to compute committed diff: {}", e))?;
-    diff.merge(&committed_diff)
-        .map_err(|e| format!("failed to merge diffs: {}", e))?;
+    // When diffing against a merge base (not HEAD), also include committed
+    // changes between merge base and HEAD, in case the working directory is
+    // clean but the branch has commits.
+    if !base_is_head {
+        let head_tree = head_commit
+            .tree()
+            .map_err(|e| format!("failed to get HEAD tree: {}", e))?;
+        let committed_diff = repo
+            .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)
+            .map_err(|e| format!("failed to compute committed diff: {}", e))?;
+        diff.merge(&committed_diff)
+            .map_err(|e| format!("failed to merge diffs: {}", e))?;
+    }
 
     let mut files: Vec<ChangedFile> = Vec::new();
 
@@ -106,9 +117,27 @@ pub fn changed_files(repo_path: &Path, base_branch: &str) -> Result<Vec<ChangedF
     Ok(files)
 }
 
-/// Try to auto-detect the base branch if "auto" is given.
+/// Try to auto-detect the base branch.
+///
+/// Resolution order:
+/// 1. The remote HEAD (refs/remotes/origin/HEAD), which tracks the remote's default branch.
+/// 2. A local or remote branch named "main" or "master".
 pub fn detect_base_branch(repo_path: &Path) -> Result<String, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("failed to open repo: {}", e))?;
+
+    // Try the remote's default branch via refs/remotes/origin/HEAD
+    if let Ok(reference) = repo.find_reference("refs/remotes/origin/HEAD") {
+        if let Ok(resolved) = reference.resolve() {
+            if let Some(name) = resolved.name() {
+                // name is e.g. "refs/remotes/origin/development"
+                if let Some(branch) = name.strip_prefix("refs/remotes/origin/") {
+                    if resolve_base(&repo, branch).is_ok() {
+                        return Ok(branch.to_string());
+                    }
+                }
+            }
+        }
+    }
 
     for candidate in &["main", "master"] {
         if resolve_base(&repo, candidate).is_ok() {
@@ -116,7 +145,7 @@ pub fn detect_base_branch(repo_path: &Path) -> Result<String, String> {
         }
     }
 
-    Err("could not auto-detect base branch (tried main, master)".to_string())
+    Err("could not auto-detect base branch".to_string())
 }
 
 fn resolve_base(repo: &Repository, base: &str) -> Result<git2::Oid, String> {

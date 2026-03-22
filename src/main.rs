@@ -16,14 +16,18 @@ fn main() {
     let cli = Cli::parse();
     let repo_path = Path::new(".");
 
+    let watchfile_path = repo_path.join(".marginalia");
+    let watchfile_content = fs::read_to_string(&watchfile_path).unwrap_or_default();
+    let config = watchfile::parse_config(&watchfile_content);
+
     let base = match &cli.base {
         Some(b) => b.clone(),
-        None => match diff::detect_base_branch(repo_path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("No base branch found: {}", e);
-                return;
-            }
+        None => match &config.base {
+            Some(b) => b.clone(),
+            None => match diff::detect_base_branch(repo_path) {
+                Ok(b) => b,
+                Err(_) => "HEAD".to_string(),
+            },
         },
     };
     let changed_files = match diff::changed_files(repo_path, &base) {
