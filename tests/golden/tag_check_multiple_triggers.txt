@@ -10,7 +10,7 @@ changed (tag WireFormat):
   src/encoder.rs:18-20
   src/decoder.rs:25-27
 check:
-  src/encoder.rs:15
-  src/decoder.rs:22
+  src/encoder.rs:15-20
+  src/decoder.rs:22-27
 
 Keep the encoder and decoder in sync

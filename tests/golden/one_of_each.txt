@@ -32,7 +32,7 @@ Make sure the README examples still compile
 
 src/encoder.rs:18-20 changed (tag WireFormat)
 check:
-  src/encoder.rs:15
+  src/encoder.rs:15-20
   src/decoder.rs:22
 
 Keep the encoder and decoder in sync

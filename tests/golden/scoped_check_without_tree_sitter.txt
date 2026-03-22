@@ -7,6 +7,6 @@ Reproduce this message by running: marginalia --base main
 ---
 
 src/auth.rs:45-46 changed
-check src/auth.rs:42
+check src/auth.rs:42-46
 
 Verify this unwrap is safe

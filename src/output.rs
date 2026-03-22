@@ -75,7 +75,8 @@ fn render_scoped_check(out: &mut String, item: &CheckItem) {
         out.push_str(&format!("check {}{}\n", item.annotation.file_path, scope_range));
     } else {
         out.push_str(&format!("{} changed\n", changed));
-        out.push_str(&format!("check {}:{}\n", item.annotation.file_path, item.annotation.line));
+        let check_range = check_range_for(item.annotation.line, &item.changed_ranges);
+        out.push_str(&format!("check {}{}\n", item.annotation.file_path, check_range));
     }
 
     out.push('\n');
@@ -152,14 +153,18 @@ fn render_tag_check(out: &mut String, item: &CheckItem, name: &str) {
         out.push_str(&format!("tag {} activated\n", name));
     }
     if item.tag_counterparts.len() <= 1 {
+        let ranges = ranges_for_file(&item.annotation.file_path, &item.matched_file_ranges);
+        let check_range = check_range_for(item.annotation.line, &ranges);
         out.push_str(&format!(
-            "check {}:{}\n",
-            item.annotation.file_path, item.annotation.line
+            "check {}{}\n",
+            item.annotation.file_path, check_range
         ));
     } else {
         out.push_str("check:\n");
         for (file, line) in &item.tag_counterparts {
-            out.push_str(&format!("  {}:{}\n", file, line));
+            let ranges = ranges_for_file(file, &item.matched_file_ranges);
+            let check_range = check_range_for(*line, &ranges);
+            out.push_str(&format!("  {}{}\n", file, check_range));
         }
     }
 
@@ -167,6 +172,35 @@ fn render_tag_check(out: &mut String, item: &CheckItem, name: &str) {
     for line in item.annotation.description.lines() {
         out.push_str(line);
         out.push('\n');
+    }
+}
+
+/// Look up the changed ranges for a specific file from matched_file_ranges.
+fn ranges_for_file(file: &str, matched_file_ranges: &[(String, Vec<(usize, usize)>)]) -> Vec<(usize, usize)> {
+    matched_file_ranges
+        .iter()
+        .find(|(f, _)| f == file)
+        .map(|(_, ranges)| ranges.clone())
+        .unwrap_or_default()
+}
+
+/// Compute the range string to check: from the annotation line through the changed lines.
+/// E.g. ":42-46" or ":42" if no changed ranges expand beyond the annotation line.
+fn check_range_for(annotation_line: usize, changed_ranges: &[(usize, usize)]) -> String {
+    let mut min_line = annotation_line;
+    let mut max_line = annotation_line;
+    for &(start, end) in changed_ranges {
+        if start < min_line {
+            min_line = start;
+        }
+        if end > max_line {
+            max_line = end;
+        }
+    }
+    if min_line == max_line {
+        format!(":{}", min_line)
+    } else {
+        format!(":{}-{}", min_line, max_line)
     }
 }
 

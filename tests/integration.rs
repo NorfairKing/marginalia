@@ -519,10 +519,11 @@ fn custom_comments_for_txt_files() {
         "-- [check:tag MyRoute] This route is hardcoded elsewhere.\n/my-route MyRouteR GET\n",
     )
     .unwrap();
-    // Add a .rs file with a matching [check:ref]
+    // Add a .rs file with a matching check:ref
+    let ref_line = ["// [check", ":ref MyRoute]\n"].concat();
     fs::write(
         repo.join("link.rs"),
-        "// [check:ref MyRoute]\nfn hardcoded_url() -> &'static str { \"/my-route\" }\n",
+        format!("{}fn hardcoded_url() -> &'static str {{ \"/my-route\" }}\n", ref_line),
     )
     .unwrap();
     git(repo, &["add", "routes.txt", "link.rs"]);
@@ -531,7 +532,7 @@ fn custom_comments_for_txt_files() {
     // Change near the ref — should activate the tag
     fs::write(
         repo.join("link.rs"),
-        "// [check:ref MyRoute]\nfn hardcoded_url() -> &'static str { \"/my-route/v2\" }\n",
+        format!("{}fn hardcoded_url() -> &'static str {{ \"/my-route/v2\" }}\n", ref_line),
     )
     .unwrap();
 
