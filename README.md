@@ -134,6 +134,17 @@ default branch (`refs/remotes/origin/HEAD`), then trying `main` and
 (showing only uncommitted changes). You can always override with
 `--base <branch>` on the command line.
 
+The `comments for <pattern>: <prefix>` directive teaches marginalia
+to recognise line comments in files it doesn't know about. This is
+useful for domain-specific formats like Yesod route files:
+
+```
+comments for routes.txt: --
+```
+
+The pattern uses glob syntax. Custom rules take priority over
+built-in language detection.
+
 ### Description syntax
 
 For all annotation types except `[check:ref]`, the description

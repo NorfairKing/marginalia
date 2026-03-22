@@ -1,6 +1,8 @@
 use clap::Parser;
+use glob::Pattern;
 use marginalia::annotations::extract_annotations;
 use marginalia::comment_tokens;
+use marginalia::CommentTokens;
 use marginalia::comments::extract_comments;
 use marginalia::diff;
 use marginalia::matching::{active_all_annotations, active_annotations, active_tag_annotations, dead_patterns, orphan_refs};
@@ -12,6 +14,33 @@ use git2::Repository;
 use std::fs;
 use std::path::Path;
 use std::process;
+
+/// Resolve comment tokens for a file path.
+///
+/// Checks custom comment rules from `.marginalia` first, then falls back to
+/// built-in language detection by file extension.
+fn resolve_comment_tokens(
+    file_path: &str,
+    custom_comments: &[watchfile::CustomComment],
+) -> Option<CommentTokens> {
+    for rule in custom_comments {
+        if let Ok(pattern) = Pattern::new(&rule.pattern) {
+            if pattern.matches(file_path) {
+                let prefix: &'static str = Box::leak(rule.line_prefix.clone().into_boxed_str());
+                let line: &'static [&'static str] = Box::leak(vec![prefix].into_boxed_slice());
+                return Some(CommentTokens {
+                    line,
+                    block: &[],
+                });
+            }
+        }
+    }
+    let extension = Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    comment_tokens(extension)
+}
 
 fn main() {
     let cli = Cli::parse();
@@ -59,7 +88,7 @@ fn main() {
         let path = repo_path.join(&changed_file.path);
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let tokens = match comment_tokens(extension) {
+        let tokens = match resolve_comment_tokens(&changed_file.path, &config.custom_comments) {
             Some(t) => t,
             None => continue,
         };
@@ -89,7 +118,7 @@ fn main() {
     }
 
     // Phase 2: find [check:all] annotations
-    let all_annotations = collect_all_annotations(repo_path);
+    let all_annotations = collect_all_annotations(repo_path, &config.custom_comments);
 
     // Validate that every pattern matches at least one tracked file.
     let tracked = tracked_file_paths(repo_path);
@@ -108,7 +137,7 @@ fn main() {
     all_checks.extend(active);
 
     // Phase 3: find [check:tag] and [check:ref] annotations
-    let tag_annotations = collect_tag_annotations(repo_path);
+    let tag_annotations = collect_tag_annotations(repo_path, &config.custom_comments);
 
     // Validate that every [check:ref] has a matching [check:tag].
     let orphans = orphan_refs(&tag_annotations);
@@ -147,7 +176,10 @@ fn main() {
 /// Collect all [check:all] annotations from:
 /// 1. The `.marginalia` file at the repo root
 /// 2. Any tracked file containing `[check:all` (found via git2 index)
-fn collect_all_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Annotation> {
+fn collect_all_annotations(
+    repo_path: &Path,
+    custom_comments: &[watchfile::CustomComment],
+) -> Vec<marginalia::annotations::Annotation> {
     let mut annotations = Vec::new();
 
     // Parse .marginalia file
@@ -160,12 +192,8 @@ fn collect_all_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Ann
     let files = find_files_with_check_all(repo_path);
     for file_path in files {
         let full_path = repo_path.join(&file_path);
-        let extension = full_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
 
-        let tokens = match comment_tokens(extension) {
+        let tokens = match resolve_comment_tokens(&file_path, custom_comments) {
             Some(t) => t,
             None => continue,
         };
@@ -188,7 +216,10 @@ fn collect_all_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Ann
 }
 
 /// Collect all [check:tag] and [check:ref] annotations from tracked files.
-fn collect_tag_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Annotation> {
+fn collect_tag_annotations(
+    repo_path: &Path,
+    custom_comments: &[watchfile::CustomComment],
+) -> Vec<marginalia::annotations::Annotation> {
     use marginalia::annotations::CheckKind;
 
     // Search for files containing either needle.
@@ -200,12 +231,8 @@ fn collect_tag_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Ann
 
     for file_path in file_set {
         let full_path = repo_path.join(&file_path);
-        let extension = full_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
 
-        let tokens = match comment_tokens(extension) {
+        let tokens = match resolve_comment_tokens(&file_path, custom_comments) {
             Some(t) => t,
             None => continue,
         };

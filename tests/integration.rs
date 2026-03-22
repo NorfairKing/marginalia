@@ -498,3 +498,101 @@ fn julius_line_and_block_comments() {
         "Test the JS behavior in all browsers."
     );
 }
+
+#[test]
+fn custom_comments_for_txt_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Add a .marginalia config with custom comment syntax for .txt files
+    fs::write(
+        repo.join(".marginalia"),
+        "base: main\ncomments for *.txt: --\n",
+    )
+    .unwrap();
+    git(repo, &["add", ".marginalia"]);
+
+    // Add a .txt file with a [check:tag] using -- comments
+    fs::write(
+        repo.join("routes.txt"),
+        "-- [check:tag MyRoute] This route is hardcoded elsewhere.\n/my-route MyRouteR GET\n",
+    )
+    .unwrap();
+    // Add a .rs file with a matching [check:ref]
+    fs::write(
+        repo.join("link.rs"),
+        "// [check:ref MyRoute]\nfn hardcoded_url() -> &'static str { \"/my-route\" }\n",
+    )
+    .unwrap();
+    git(repo, &["add", "routes.txt", "link.rs"]);
+    git(repo, &["commit", "-m", "add routes and link"]);
+
+    // Change near the ref — should activate the tag
+    fs::write(
+        repo.join("link.rs"),
+        "// [check:ref MyRoute]\nfn hardcoded_url() -> &'static str { \"/my-route/v2\" }\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        output.status.success(),
+        "marginalia should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tag MyRoute"),
+        "stdout should show activated tag: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("routes.txt"),
+        "stdout should mention routes.txt: {}",
+        stdout
+    );
+}
+
+#[test]
+fn custom_comments_orphan_ref_in_txt_detected() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Custom comment syntax for .txt
+    fs::write(
+        repo.join(".marginalia"),
+        "base: main\ncomments for *.txt: --\n",
+    )
+    .unwrap();
+    git(repo, &["add", ".marginalia"]);
+
+    // A .txt file with a [check:ref] but no matching tag
+    fs::write(
+        repo.join("routes.txt"),
+        "-- [check:ref NoSuchTag]\n/foo FooR GET\n",
+    )
+    .unwrap();
+    git(repo, &["add", "routes.txt"]);
+    git(repo, &["commit", "-m", "add orphan ref in txt"]);
+
+    // Make a change so marginalia runs
+    fs::write(
+        repo.join("lib.rs"),
+        "// [check] Ensure bounds are checked\nfn process(x: usize) {\n    let y = x + 1;\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        !output.status.success(),
+        "marginalia should fail for orphan ref in .txt"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no matching [check:tag NoSuchTag]"),
+        "stderr should mention the orphan ref: {}",
+        stderr
+    );
+}

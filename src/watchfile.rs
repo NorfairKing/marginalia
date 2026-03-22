@@ -2,11 +2,22 @@ use crate::annotations::{Annotation, CheckKind};
 use regex::Regex;
 use std::sync::LazyLock;
 
+/// A custom comment syntax rule from the `.marginalia` file.
+#[derive(Debug, Clone)]
+pub struct CustomComment {
+    /// Glob pattern matching file paths (e.g. `*.txt`, `routes.txt`).
+    pub pattern: String,
+    /// The line comment prefix (e.g. `--`, `#`).
+    pub line_prefix: String,
+}
+
 /// Configuration extracted from a `.marginalia` file.
 #[derive(Debug, Default)]
 pub struct Config {
     /// The base branch to diff against.
     pub base: Option<String>,
+    /// Custom comment syntax rules.
+    pub custom_comments: Vec<CustomComment>,
 }
 
 /// Parse configuration directives from a `.marginalia` file.
@@ -15,6 +26,10 @@ pub struct Config {
 /// ```text
 /// base: development
 /// ```
+/// Matches `comments for <pattern>: <prefix>`.
+static COMMENTS_FOR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^comments\s+for\s+(.+?):\s+(.+)$").unwrap());
+
 pub fn parse_config(content: &str) -> Config {
     let mut config = Config::default();
     for line in content.lines() {
@@ -24,6 +39,12 @@ pub fn parse_config(content: &str) -> Config {
             if !value.is_empty() {
                 config.base = Some(value.to_string());
             }
+        }
+        if let Some(caps) = COMMENTS_FOR_RE.captures(trimmed) {
+            config.custom_comments.push(CustomComment {
+                pattern: caps[1].trim().to_string(),
+                line_prefix: caps[2].trim().to_string(),
+            });
         }
     }
     config
@@ -60,7 +81,11 @@ pub fn parse_watchfile(content: &str, file_path: &str) -> Vec<Annotation> {
         let line = lines[i];
         let trimmed = line.trim();
 
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("base:") {
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("base:")
+            || COMMENTS_FOR_RE.is_match(trimmed)
+        {
             i += 1;
             continue;
         }
@@ -234,5 +259,32 @@ when src/**/*.rs changes:
     fn config_empty() {
         let config = parse_config("");
         assert_eq!(config.base, None);
+    }
+
+    #[test]
+    fn config_custom_comments() {
+        let content = "\
+base: development
+comments for *.txt: --
+comments for routes.txt: --
+";
+        let config = parse_config(content);
+        assert_eq!(config.custom_comments.len(), 2);
+        assert_eq!(config.custom_comments[0].pattern, "*.txt");
+        assert_eq!(config.custom_comments[0].line_prefix, "--");
+        assert_eq!(config.custom_comments[1].pattern, "routes.txt");
+        assert_eq!(config.custom_comments[1].line_prefix, "--");
+    }
+
+    #[test]
+    fn config_custom_comments_not_treated_as_rules() {
+        let content = "\
+comments for *.txt: --
+
+when src/**/*.rs changes:
+  Update examples.
+";
+        let anns = parse_watchfile(content, ".marginalia");
+        assert_eq!(anns.len(), 1);
     }
 }
