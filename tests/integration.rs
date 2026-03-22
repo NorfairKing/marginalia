@@ -157,12 +157,9 @@ fn dead_pattern_in_source_file() {
     let repo = dir.path();
     setup_repo(repo);
 
-    // Add a file with [check:all] that has a pattern matching no tracked files.
-    fs::write(
-        repo.join("notes.rs"),
-        "// [check:all nonexistent/**/*.xyz] Update the docs\nfn foo() {}\n",
-    )
-    .unwrap();
+    // Add a file with a check-all that has a pattern matching no tracked files.
+    let check_all = format!("// [check:{} nonexistent/**/*.xyz] Update the docs\nfn foo() {{}}\n", "all");
+    fs::write(repo.join("notes.rs"), &check_all).unwrap();
     git(repo, &["add", "notes.rs"]);
     git(repo, &["commit", "-m", "add notes"]);
 
@@ -183,6 +180,230 @@ fn dead_pattern_in_source_file() {
         stderr.contains("nonexistent/**/*.xyz"),
         "stderr should include the pattern: {}",
         stderr
+    );
+}
+
+#[test]
+fn orphan_ref_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Add a file with [check:ref] but no matching [check:tag]
+    fs::write(
+        repo.join("decoder.rs"),
+        "// [check:ref WireFormat]\nfn decode() {}\n",
+    )
+    .unwrap();
+    git(repo, &["add", "decoder.rs"]);
+    git(repo, &["commit", "-m", "add decoder"]);
+
+    // Make a change so there are changed files
+    fs::write(
+        repo.join("lib.rs"),
+        "// [check] Ensure bounds are checked\nfn process(x: usize) {\n    let y = x + 1;\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        !output.status.success(),
+        "marginalia should exit with error for orphan ref"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no matching [check:tag WireFormat]"),
+        "stderr should mention the orphan ref: {}",
+        stderr
+    );
+}
+
+#[test]
+fn lone_tag_is_fine() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // A [check:tag] without any ref or other tag is fine
+    fs::write(
+        repo.join("encoder.rs"),
+        "// [check:tag WireFormat] Keep in sync\nfn encode() {}\n",
+    )
+    .unwrap();
+    git(repo, &["add", "encoder.rs"]);
+    git(repo, &["commit", "-m", "add encoder"]);
+
+    // Make a change so there are changed files
+    fs::write(
+        repo.join("lib.rs"),
+        "// [check] Ensure bounds are checked\nfn process(x: usize) {\n    let y = x + 1;\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        output.status.success(),
+        "marginalia should succeed with a lone tag: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn ref_activates_tag() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // A tag in encoder.rs and a ref in decoder.rs
+    fs::write(
+        repo.join("encoder.rs"),
+        "// [check:tag WireFormat] Keep in sync\nfn encode() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("decoder.rs"),
+        "// [check:ref WireFormat]\nfn decode() {}\n",
+    )
+    .unwrap();
+    git(repo, &["add", "encoder.rs", "decoder.rs"]);
+    git(repo, &["commit", "-m", "add encoder and decoder"]);
+
+    // Change near the ref — should activate the tag
+    fs::write(
+        repo.join("decoder.rs"),
+        "// [check:ref WireFormat]\nfn decode() {\n    todo!()\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        output.status.success(),
+        "marginalia should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tag WireFormat"),
+        "stdout should show activated tag: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("encoder.rs"),
+        "stdout should mention encoder.rs: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("decoder.rs"),
+        "stdout should mention decoder.rs: {}",
+        stdout
+    );
+}
+
+#[test]
+fn tag_activates_counterpart() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Add two files with matching [check:tag]
+    fs::write(
+        repo.join("encoder.rs"),
+        "// [check:tag WireFormat] Keep in sync\nfn encode() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("decoder.rs"),
+        "// [check:tag WireFormat] Keep in sync\nfn decode() {}\n",
+    )
+    .unwrap();
+    git(repo, &["add", "encoder.rs", "decoder.rs"]);
+    git(repo, &["commit", "-m", "add encoder and decoder"]);
+
+    // Change the encoder — should activate both tags
+    fs::write(
+        repo.join("encoder.rs"),
+        "// [check:tag WireFormat] Keep in sync\nfn encode() {\n    todo!()\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        output.status.success(),
+        "marginalia should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tag WireFormat"),
+        "stdout should show activated tag: {}",
+        stdout
+    );
+    // Both counterparts should appear
+    assert!(
+        stdout.contains("encoder.rs"),
+        "stdout should mention encoder.rs: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("decoder.rs"),
+        "stdout should mention decoder.rs: {}",
+        stdout
+    );
+}
+
+#[test]
+fn two_tags_produce_one_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Two files with the same [check:tag], each with its own description
+    fs::write(
+        repo.join("encoder.rs"),
+        "// [check:tag WireFormat] Encoder side\nfn encode() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("decoder.rs"),
+        "// [check:tag WireFormat] Decoder side\nfn decode() {}\n",
+    )
+    .unwrap();
+    git(repo, &["add", "encoder.rs", "decoder.rs"]);
+    git(repo, &["commit", "-m", "add encoder and decoder"]);
+
+    // Change the encoder
+    fs::write(
+        repo.join("encoder.rs"),
+        "// [check:tag WireFormat] Encoder side\nfn encode() {\n    todo!()\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        output.status.success(),
+        "marginalia should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should produce exactly one "---" separator (one check item)
+    let separator_count = stdout.matches("---").count();
+    assert_eq!(
+        separator_count, 1,
+        "two tags with the same name should produce one message, got {}:\n{}",
+        separator_count, stdout
+    );
+
+    // Both locations should appear in the check list
+    assert!(
+        stdout.contains("encoder.rs:1"),
+        "should list encoder.rs location: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("decoder.rs:1"),
+        "should list decoder.rs location: {}",
+        stdout
     );
 }
 

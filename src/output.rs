@@ -17,6 +17,9 @@ pub struct CheckItem {
     /// For [check:all]: the changed line ranges in each matched file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub matched_file_ranges: Vec<(String, Vec<(usize, usize)>)>,
+    /// For [check:tag]: all locations sharing the tag (file_path, line).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tag_counterparts: Vec<(String, usize)>,
 }
 
 /// Render checks as plain text.
@@ -43,6 +46,9 @@ pub fn render_text(checks: &[CheckItem], base: &str) -> String {
             CheckKind::Check => render_scoped_check(&mut out, item),
             CheckKind::File => render_file_check(&mut out, item),
             CheckKind::All { pattern } => render_all_check(&mut out, item, pattern),
+            CheckKind::Tag { name } | CheckKind::Ref { name } => {
+                render_tag_check(&mut out, item, name)
+            }
         }
     }
 
@@ -123,6 +129,47 @@ fn render_all_check(out: &mut String, item: &CheckItem, pattern: &str) {
     }
 }
 
+fn render_tag_check(out: &mut String, item: &CheckItem, name: &str) {
+    let file_parts: Vec<String> = item
+        .matched_file_ranges
+        .iter()
+        .map(|(file, ranges)| format_ranges(file, ranges))
+        .collect();
+    let files: Vec<&str> = if file_parts.is_empty() {
+        item.matched_files.iter().map(|s| s.as_str()).collect()
+    } else {
+        file_parts.iter().map(|s| s.as_str()).collect()
+    };
+
+    if files.len() == 1 {
+        out.push_str(&format!("{} changed (tag {})\n", files[0], name));
+    } else if files.len() > 1 {
+        out.push_str(&format!("changed (tag {}):\n", name));
+        for file in &files {
+            out.push_str(&format!("  {}\n", file));
+        }
+    } else {
+        out.push_str(&format!("tag {} activated\n", name));
+    }
+    if item.tag_counterparts.len() <= 1 {
+        out.push_str(&format!(
+            "check {}:{}\n",
+            item.annotation.file_path, item.annotation.line
+        ));
+    } else {
+        out.push_str("check:\n");
+        for (file, line) in &item.tag_counterparts {
+            out.push_str(&format!("  {}:{}\n", file, line));
+        }
+    }
+
+    out.push('\n');
+    for line in item.annotation.description.lines() {
+        out.push_str(line);
+        out.push('\n');
+    }
+}
+
 /// Format line ranges for a file, e.g. "src/auth.rs:15-20,38"
 fn format_ranges(file: &str, ranges: &[(usize, usize)]) -> String {
     if ranges.is_empty() {
@@ -169,6 +216,7 @@ mod tests {
             changed_ranges: vec![(10, 15)],
             matched_files: vec![],
             matched_file_ranges: vec![],
+            tag_counterparts: vec![],
         }];
         let out = render_json(&checks);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();

@@ -4,6 +4,87 @@ use marginalia::scope::Scope;
 use std::fs;
 use std::path::Path;
 
+#[test]
+fn tag_check() {
+    golden_test(
+        "tag_check",
+        vec![CheckItem {
+            annotation: Annotation {
+                file_path: "src/encoder.rs".to_string(),
+                line: 15,
+                kind: CheckKind::Tag {
+                    name: "WireFormat".to_string(),
+                },
+                description: "Keep the encoder and decoder in sync".to_string(),
+            },
+            scope: None,
+            changed_ranges: vec![],
+            matched_files: vec!["src/encoder.rs".to_string()],
+            matched_file_ranges: vec![("src/encoder.rs".to_string(), vec![(18, 20)])],
+            tag_counterparts: vec![
+                ("src/encoder.rs".to_string(), 15),
+                ("src/decoder.rs".to_string(), 22),
+            ],
+        }],
+    );
+}
+
+#[test]
+fn tag_check_multiple_triggers() {
+    // Both encoder.rs and decoder.rs changed near their tag — both should be listed as triggers.
+    golden_test(
+        "tag_check_multiple_triggers",
+        vec![CheckItem {
+            annotation: Annotation {
+                file_path: "src/encoder.rs".to_string(),
+                line: 15,
+                kind: CheckKind::Tag {
+                    name: "WireFormat".to_string(),
+                },
+                description: "Keep the encoder and decoder in sync".to_string(),
+            },
+            scope: None,
+            changed_ranges: vec![],
+            matched_files: vec!["src/encoder.rs".to_string(), "src/decoder.rs".to_string()],
+            matched_file_ranges: vec![
+                ("src/encoder.rs".to_string(), vec![(18, 20)]),
+                ("src/decoder.rs".to_string(), vec![(25, 27)]),
+            ],
+            tag_counterparts: vec![
+                ("src/encoder.rs".to_string(), 15),
+                ("src/decoder.rs".to_string(), 22),
+            ],
+        }],
+    );
+}
+
+#[test]
+fn tag_check_three_locations() {
+    // Three files share the same tag — all three should appear as locations to check.
+    golden_test(
+        "tag_check_three_locations",
+        vec![CheckItem {
+            annotation: Annotation {
+                file_path: "src/encoder.rs".to_string(),
+                line: 15,
+                kind: CheckKind::Tag {
+                    name: "WireFormat".to_string(),
+                },
+                description: "Keep the encoder, decoder, and validator in sync".to_string(),
+            },
+            scope: None,
+            changed_ranges: vec![],
+            matched_files: vec!["src/encoder.rs".to_string()],
+            matched_file_ranges: vec![("src/encoder.rs".to_string(), vec![(18, 20)])],
+            tag_counterparts: vec![
+                ("src/encoder.rs".to_string(), 15),
+                ("src/decoder.rs".to_string(), 22),
+                ("src/validator.rs".to_string(), 8),
+            ],
+        }],
+    );
+}
+
 fn golden_test(name: &str, checks: Vec<CheckItem>) {
     let golden_path = Path::new("tests/golden").join(format!("{}.txt", name));
     let actual = render_text(&checks, "main");
@@ -55,6 +136,7 @@ fn scoped_check_with_tree_sitter() {
             changed_ranges: vec![(45, 46)],
             matched_files: vec![],
             matched_file_ranges: vec![],
+            tag_counterparts: vec![],
         }],
     );
 }
@@ -74,6 +156,7 @@ fn scoped_check_without_tree_sitter() {
             changed_ranges: vec![(45, 46)],
             matched_files: vec![],
             matched_file_ranges: vec![],
+            tag_counterparts: vec![],
         }],
     );
 }
@@ -93,6 +176,7 @@ fn file_check() {
             changed_ranges: vec![(15, 20), (38, 38)],
             matched_files: vec![],
             matched_file_ranges: vec![],
+            tag_counterparts: vec![],
         }],
     );
 }
@@ -117,6 +201,7 @@ fn all_check() {
                 ("src/auth.rs".to_string(), vec![(42, 48)]),
                 ("src/lib.rs".to_string(), vec![(5, 10)]),
             ],
+            tag_counterparts: vec![],
         }],
     );
 }
@@ -144,6 +229,7 @@ fn multiline_description() {
             changed_ranges: vec![(12, 14)],
             matched_files: vec![],
             matched_file_ranges: vec![],
+            tag_counterparts: vec![],
         }],
     );
 }
@@ -168,6 +254,7 @@ fn multiple_checks() {
                 changed_ranges: vec![(45, 46)],
                 matched_files: vec![],
                 matched_file_ranges: vec![],
+                tag_counterparts: vec![],
             },
             CheckItem {
                 annotation: Annotation {
@@ -180,6 +267,7 @@ fn multiple_checks() {
                 changed_ranges: vec![(45, 46)],
                 matched_files: vec![],
                 matched_file_ranges: vec![],
+                tag_counterparts: vec![],
             },
             CheckItem {
                 annotation: Annotation {
@@ -194,6 +282,7 @@ fn multiple_checks() {
                 changed_ranges: vec![],
                 matched_files: vec!["src/auth.rs".to_string()],
                 matched_file_ranges: vec![("src/auth.rs".to_string(), vec![(45, 46)])],
+                tag_counterparts: vec![],
             },
         ],
     );
@@ -218,6 +307,7 @@ fn file_and_all_mix() {
                 changed_ranges: vec![(15, 20), (38, 38)],
                 matched_files: vec![],
                 matched_file_ranges: vec![],
+                tag_counterparts: vec![],
             },
             CheckItem {
                 annotation: Annotation {
@@ -234,6 +324,79 @@ fn file_and_all_mix() {
                 changed_ranges: vec![],
                 matched_files: vec!["api.proto".to_string()],
                 matched_file_ranges: vec![("api.proto".to_string(), vec![(1, 10)])],
+                tag_counterparts: vec![],
+            },
+        ],
+    );
+}
+
+#[test]
+fn one_of_each() {
+    golden_test(
+        "one_of_each",
+        vec![
+            CheckItem {
+                annotation: Annotation {
+                    file_path: "src/auth.rs".to_string(),
+                    line: 41,
+                    kind: CheckKind::Check,
+                    description: "Verify this unwrap is safe".to_string(),
+                },
+                scope: Some(Scope {
+                    start: 42,
+                    end: 48,
+                    label: Some("fn parse_token".to_string()),
+                }),
+                changed_ranges: vec![(45, 46)],
+                matched_files: vec![],
+                matched_file_ranges: vec![],
+                tag_counterparts: vec![],
+            },
+            CheckItem {
+                annotation: Annotation {
+                    file_path: "src/api.rs".to_string(),
+                    line: 1,
+                    kind: CheckKind::File,
+                    description: "Every handler must check permissions".to_string(),
+                },
+                scope: None,
+                changed_ranges: vec![(15, 20)],
+                matched_files: vec![],
+                matched_file_ranges: vec![],
+                tag_counterparts: vec![],
+            },
+            CheckItem {
+                annotation: Annotation {
+                    file_path: "README.md".to_string(),
+                    line: 33,
+                    kind: CheckKind::All {
+                        pattern: "src/**/*.rs".to_string(),
+                    },
+                    description: "Make sure the README examples still compile".to_string(),
+                },
+                scope: None,
+                changed_ranges: vec![],
+                matched_files: vec!["src/auth.rs".to_string()],
+                matched_file_ranges: vec![("src/auth.rs".to_string(), vec![(45, 46)])],
+                tag_counterparts: vec![],
+            },
+            CheckItem {
+                annotation: Annotation {
+                    file_path: "src/encoder.rs".to_string(),
+                    line: 15,
+                    kind: CheckKind::Tag {
+                        name: "WireFormat".to_string(),
+                    },
+                    description: "Keep the encoder and decoder in sync".to_string(),
+                },
+                scope: None,
+                changed_ranges: vec![],
+                matched_files: vec!["src/encoder.rs".to_string()],
+                matched_file_ranges: vec![("src/encoder.rs".to_string(), vec![(18, 20)])],
+                tag_counterparts: vec![
+                    ("src/encoder.rs".to_string(), 15),
+                    ("src/decoder.rs".to_string(), 22),
+                ],
             },
         ],
     );
@@ -258,6 +421,7 @@ fn single_line_scope() {
             changed_ranges: vec![(6, 6)],
             matched_files: vec![],
             matched_file_ranges: vec![],
+            tag_counterparts: vec![],
         }],
     );
 }

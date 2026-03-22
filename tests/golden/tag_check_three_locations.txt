@@ -1,0 +1,15 @@
+DO NOT IGNORE THIS MESSAGE
+
+marginalia found the following checks near changed code.
+Each check shows what changed, where to look, and what to check.
+Reproduce this message by running: marginalia --base main
+
+---
+
+src/encoder.rs:18-20 changed (tag WireFormat)
+check:
+  src/encoder.rs:15
+  src/decoder.rs:22
+  src/validator.rs:8
+
+Keep the encoder, decoder, and validator in sync

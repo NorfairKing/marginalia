@@ -36,6 +36,7 @@ pub fn active_annotations(
                 changed_ranges: all_ranges.clone(),
                 matched_files: vec![],
                 matched_file_ranges: vec![],
+                tag_counterparts: vec![],
             }),
             CheckKind::Check => {
                 let scope = tree.and_then(|t| scope::find_scope(t, ann.line, source));
@@ -47,12 +48,13 @@ pub fn active_annotations(
                         changed_ranges: overlapping,
                         matched_files: vec![],
                         matched_file_ranges: vec![],
+                        tag_counterparts: vec![],
                     })
                 } else {
                     None
                 }
             }
-            CheckKind::All { .. } => None,
+            CheckKind::All { .. } | CheckKind::Tag { .. } | CheckKind::Ref { .. } => None,
         })
         .collect()
 }
@@ -133,12 +135,132 @@ pub fn active_all_annotations(
                     changed_ranges: vec![],
                     matched_files,
                     matched_file_ranges,
+                    tag_counterparts: vec![],
                 })
             } else {
                 None
             }
         })
         .collect()
+}
+
+/// Validate that every [check:ref] has a matching [check:tag].
+///
+/// A ref without a corresponding tag is an error. A tag without any ref is fine.
+pub fn orphan_refs(annotations: &[Annotation]) -> Vec<(&Annotation, &str)> {
+    use std::collections::HashSet;
+    let tag_names: HashSet<&str> = annotations
+        .iter()
+        .filter_map(|ann| match &ann.kind {
+            CheckKind::Tag { name } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    let mut result: Vec<(&Annotation, &str)> = annotations
+        .iter()
+        .filter_map(|ann| match &ann.kind {
+            CheckKind::Ref { name } if !tag_names.contains(name.as_str()) => {
+                Some((ann, name.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    result.sort_by_key(|(ann, _)| (&ann.file_path, ann.line));
+    result
+}
+
+/// Activate [check:tag] and [check:ref] annotations.
+///
+/// A tag/ref annotation is active if any annotation with the same name
+/// is near changed code. When one activates, they all activate.
+/// The emitted CheckItem uses the first [check:tag] as the representative
+/// (for its description). All tag and ref locations are listed as counterparts.
+///
+/// `per_file_annotations` contains (annotations, changed_file, source, tree)
+/// tuples for each changed file that was already parsed.
+pub fn active_tag_annotations(
+    all_tag_annotations: &[Annotation],
+    per_file_annotations: &[(
+        &[Annotation],
+        &ChangedFile,
+        &str,
+        Option<&Tree>,
+    )],
+) -> Vec<CheckItem> {
+    use std::collections::HashMap;
+
+    fn tag_name(ann: &Annotation) -> Option<&str> {
+        match &ann.kind {
+            CheckKind::Tag { name } | CheckKind::Ref { name } => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    // Group all tag/ref annotations by name
+    let mut by_name: HashMap<&str, Vec<&Annotation>> = HashMap::new();
+    for ann in all_tag_annotations {
+        if let Some(name) = tag_name(ann) {
+            by_name.entry(name).or_default().push(ann);
+        }
+    }
+
+    // For each changed file, find which tag/ref annotations are near changed code.
+    // Track the triggering file and overlapping ranges per tag name.
+    type TriggerRanges = Vec<(String, Vec<(usize, usize)>)>;
+    let mut triggered: HashMap<&str, TriggerRanges> = HashMap::new();
+    for (annotations, changed_file, source, tree) in per_file_annotations {
+        let all_ranges: Vec<(usize, usize)> = changed_file
+            .hunks
+            .iter()
+            .map(|h| (h.new_start, h.new_end))
+            .collect();
+
+        for ann in *annotations {
+            if let Some(name) = tag_name(ann) {
+                let scope = tree.and_then(|t| scope::find_scope(t, ann.line, source));
+                let overlapping = overlapping_ranges(&all_ranges, ann, scope.as_ref());
+                if !overlapping.is_empty() {
+                    triggered
+                        .entry(name)
+                        .or_default()
+                        .push((changed_file.path.clone(), overlapping));
+                }
+            }
+        }
+    }
+
+    if triggered.is_empty() {
+        return Vec::new();
+    }
+
+    // Emit one CheckItem per activated tag name, listing all counterpart locations.
+    let mut result = Vec::new();
+    for (name, trigger_ranges) in &triggered {
+        if let Some(anns) = by_name.get(name) {
+            let matched_files: Vec<String> =
+                trigger_ranges.iter().map(|(f, _)| f.clone()).collect();
+            let counterparts: Vec<(String, usize)> = anns
+                .iter()
+                .map(|a| (a.file_path.clone(), a.line))
+                .collect();
+            // Use the first [check:tag] as the representative (for its description).
+            let representative = anns
+                .iter()
+                .find(|a| matches!(a.kind, CheckKind::Tag { .. }))
+                .unwrap_or(&anns[0]);
+            result.push(CheckItem {
+                annotation: (*representative).clone(),
+                scope: None,
+                changed_ranges: vec![],
+                matched_files,
+                matched_file_ranges: trigger_ranges.clone(),
+                tag_counterparts: counterparts,
+            });
+        }
+    }
+
+    result
 }
 
 /// Return the changed ranges that overlap with the annotation's scope (or proximity).
@@ -402,5 +524,156 @@ fn other() {
         }];
         let active = active_all_annotations(&anns, &files);
         assert_eq!(active.len(), 1);
+    }
+
+    fn tag_ann(file: &str, line: usize, name: &str, desc: &str) -> Annotation {
+        Annotation {
+            file_path: file.to_string(),
+            line,
+            kind: CheckKind::Tag {
+                name: name.to_string(),
+            },
+            description: desc.to_string(),
+        }
+    }
+
+    fn ref_ann(file: &str, line: usize, name: &str) -> Annotation {
+        Annotation {
+            file_path: file.to_string(),
+            line,
+            kind: CheckKind::Ref {
+                name: name.to_string(),
+            },
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn orphan_ref_detected() {
+        let anns = vec![ref_ann("a.rs", 1, "Foo")];
+        let orphans = orphan_refs(&anns);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].1, "Foo");
+    }
+
+    #[test]
+    fn ref_with_matching_tag_not_orphan() {
+        let anns = vec![
+            tag_ann("a.rs", 1, "Foo", "keep in sync"),
+            ref_ann("b.rs", 5, "Foo"),
+        ];
+        let orphans = orphan_refs(&anns);
+        assert_eq!(orphans.len(), 0);
+    }
+
+    #[test]
+    fn tag_alone_is_fine() {
+        let anns = vec![tag_ann("a.rs", 1, "Foo", "keep in sync")];
+        let orphans = orphan_refs(&anns);
+        assert_eq!(orphans.len(), 0);
+    }
+
+    #[test]
+    fn tag_activates_all_counterparts() {
+        // Two tag annotations with name "Sync", one in a changed file near a change
+        let tag_anns = vec![
+            tag_ann("a.rs", 5, "Sync", "keep in sync"),
+            tag_ann("b.rs", 10, "Sync", "keep in sync"),
+        ];
+
+        let cf = ChangedFile {
+            path: "a.rs".to_string(),
+            hunks: vec![Hunk {
+                new_start: 6,
+                new_end: 8,
+            }],
+        };
+
+        // The annotations from the changed file (a.rs) include the tag
+        let file_anns = vec![tag_ann("a.rs", 5, "Sync", "keep in sync")];
+
+        let per_file = vec![(
+            file_anns.as_slice(),
+            &cf,
+            "" as &str,
+            None::<&tree_sitter::Tree>,
+        )];
+
+        let active = active_tag_annotations(&tag_anns, &per_file);
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            active[0].tag_counterparts,
+            vec![
+                ("a.rs".to_string(), 5),
+                ("b.rs".to_string(), 10),
+            ]
+        );
+    }
+
+    #[test]
+    fn tag_does_not_activate_when_no_change_nearby() {
+        let tag_anns = vec![
+            tag_ann("a.rs", 5, "Sync", "keep in sync"),
+            tag_ann("b.rs", 10, "Sync", "keep in sync"),
+        ];
+
+        let cf = ChangedFile {
+            path: "a.rs".to_string(),
+            hunks: vec![Hunk {
+                new_start: 50,
+                new_end: 55,
+            }],
+        };
+
+        let file_anns = vec![tag_ann("a.rs", 5, "Sync", "keep in sync")];
+
+        let per_file = vec![(
+            file_anns.as_slice(),
+            &cf,
+            "" as &str,
+            None::<&tree_sitter::Tree>,
+        )];
+
+        let active = active_tag_annotations(&tag_anns, &per_file);
+        assert_eq!(active.len(), 0);
+    }
+
+    #[test]
+    fn ref_triggers_tag_activation() {
+        // A tag in a.rs and a ref in b.rs — change near the ref should activate
+        let all_anns = vec![
+            tag_ann("a.rs", 5, "Sync", "keep in sync"),
+            ref_ann("b.rs", 10, "Sync"),
+        ];
+
+        let cf = ChangedFile {
+            path: "b.rs".to_string(),
+            hunks: vec![Hunk {
+                new_start: 11,
+                new_end: 13,
+            }],
+        };
+
+        let file_anns = vec![ref_ann("b.rs", 10, "Sync")];
+
+        let per_file = vec![(
+            file_anns.as_slice(),
+            &cf,
+            "" as &str,
+            None::<&tree_sitter::Tree>,
+        )];
+
+        let active = active_tag_annotations(&all_anns, &per_file);
+        assert_eq!(active.len(), 1);
+        // Representative should be the tag, not the ref
+        assert_eq!(active[0].annotation.file_path, "a.rs");
+        assert!(matches!(active[0].annotation.kind, CheckKind::Tag { .. }));
+        assert_eq!(
+            active[0].tag_counterparts,
+            vec![
+                ("a.rs".to_string(), 5),
+                ("b.rs".to_string(), 10),
+            ]
+        );
     }
 }

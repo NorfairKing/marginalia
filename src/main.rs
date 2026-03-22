@@ -3,7 +3,7 @@ use marginalia::annotations::extract_annotations;
 use marginalia::comment_tokens;
 use marginalia::comments::extract_comments;
 use marginalia::diff;
-use marginalia::matching::{active_all_annotations, active_annotations, dead_patterns};
+use marginalia::matching::{active_all_annotations, active_annotations, active_tag_annotations, dead_patterns, orphan_refs};
 use marginalia::optparse::{Cli, OutputFormat};
 use marginalia::output::{render_json, render_text, CheckItem};
 use marginalia::scope;
@@ -47,7 +47,15 @@ fn main() {
     let mut all_checks: Vec<CheckItem> = Vec::new();
 
     // Phase 1: scan changed files for [check] and [check:file] annotations
-    for changed_file in &changed_files {
+    // We also store parsed data per file so tag annotations can be activated in phase 3.
+    struct ParsedFile {
+        annotations: Vec<marginalia::annotations::Annotation>,
+        source: String,
+        tree: Option<tree_sitter::Tree>,
+    }
+    let mut parsed_files: Vec<(usize, ParsedFile)> = Vec::new();
+
+    for (idx, changed_file) in changed_files.iter().enumerate() {
         let path = repo_path.join(&changed_file.path);
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
@@ -77,6 +85,7 @@ fn main() {
         );
 
         all_checks.extend(active);
+        parsed_files.push((idx, ParsedFile { annotations, source, tree }));
     }
 
     // Phase 2: find [check:all] annotations
@@ -97,6 +106,35 @@ fn main() {
 
     let active = active_all_annotations(&all_annotations, &changed_files);
     all_checks.extend(active);
+
+    // Phase 3: find [check:tag] and [check:ref] annotations
+    let tag_annotations = collect_tag_annotations(repo_path);
+
+    // Validate that every [check:ref] has a matching [check:tag].
+    let orphans = orphan_refs(&tag_annotations);
+    if !orphans.is_empty() {
+        for (ann, name) in &orphans {
+            eprintln!(
+                "error: [check:ref {}] in {}:{} has no matching [check:tag {}]",
+                name, ann.file_path, ann.line, name,
+            );
+        }
+        process::exit(1);
+    }
+
+    let per_file: Vec<_> = parsed_files
+        .iter()
+        .map(|(idx, pf)| {
+            (
+                pf.annotations.as_slice(),
+                &changed_files[*idx],
+                pf.source.as_str(),
+                pf.tree.as_ref(),
+            )
+        })
+        .collect();
+    let active_tags = active_tag_annotations(&tag_annotations, &per_file);
+    all_checks.extend(active_tags);
 
     let output = match cli.format {
         OutputFormat::Text => render_text(&all_checks, &base),
@@ -149,6 +187,46 @@ fn collect_all_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Ann
     annotations
 }
 
+/// Collect all [check:tag] and [check:ref] annotations from tracked files.
+fn collect_tag_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Annotation> {
+    use marginalia::annotations::CheckKind;
+
+    // Search for files containing either needle.
+    let mut file_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    file_set.extend(find_files_with_needle(repo_path, b"[check:tag"));
+    file_set.extend(find_files_with_needle(repo_path, b"[check:ref"));
+
+    let mut annotations = Vec::new();
+
+    for file_path in file_set {
+        let full_path = repo_path.join(&file_path);
+        let extension = full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+        let tokens = match comment_tokens(extension) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        let source = match fs::read_to_string(&full_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let comments = extract_comments(&source, &tokens);
+        let file_annotations = extract_annotations(&comments, &file_path);
+        annotations.extend(
+            file_annotations
+                .into_iter()
+                .filter(|a| matches!(a.kind, CheckKind::Tag { .. } | CheckKind::Ref { .. })),
+        );
+    }
+
+    annotations
+}
+
 /// Return all tracked file paths from the git index.
 fn tracked_file_paths(repo_path: &Path) -> Vec<String> {
     let repo = match Repository::open(repo_path) {
@@ -169,6 +247,15 @@ fn tracked_file_paths(repo_path: &Path) -> Vec<String> {
 /// Search tracked files for the string `[check:all` using libgit2's index.
 /// Returns paths of files that contain the marker, excluding `.marginalia`.
 fn find_files_with_check_all(repo_path: &Path) -> Vec<String> {
+    find_files_with_needle(repo_path, b"[check:all")
+        .into_iter()
+        .filter(|p| p != ".marginalia")
+        .collect()
+}
+
+/// Search tracked files for a byte needle using libgit2's index.
+/// Returns paths of files that contain the needle.
+fn find_files_with_needle(repo_path: &Path, needle: &[u8]) -> Vec<String> {
     let repo = match Repository::open(repo_path) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
@@ -178,7 +265,6 @@ fn find_files_with_check_all(repo_path: &Path) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    let needle = b"[check:all";
     let mut results = Vec::new();
 
     for entry in index.iter() {
@@ -186,10 +272,6 @@ fn find_files_with_check_all(repo_path: &Path) -> Vec<String> {
             Ok(p) => p.to_string(),
             Err(_) => continue,
         };
-
-        if path == ".marginalia" {
-            continue;
-        }
 
         let full_path = repo_path.join(&path);
         let content = match fs::read(&full_path) {

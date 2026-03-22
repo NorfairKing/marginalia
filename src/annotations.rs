@@ -13,6 +13,14 @@ pub enum CheckKind {
     All {
         pattern: String,
     },
+    /// A tagged check — activates when any other [check:tag] with the same name activates.
+    Tag {
+        name: String,
+    },
+    /// A tag reference — like Tag but carries no description of its own.
+    Ref {
+        name: String,
+    },
 }
 
 /// A parsed [check] annotation.
@@ -36,6 +44,14 @@ static CHECK_RE: LazyLock<Regex> =
 /// Matches `[check:all <pattern>]` at the start of the comment text.
 static ALL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[check:all\s+([^\]]+)\]\s*(.*)").unwrap());
+
+/// Matches `[check:tag TagName]` at the start of the comment text.
+static TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[check:tag\s+(\S+)\]\s*(.*)").unwrap());
+
+/// Matches `[check:ref TagName]` at the start of the comment text.
+static REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[check:ref\s+(\S+)\]").unwrap());
 
 /// Extract annotations from a list of comments.
 ///
@@ -67,6 +83,40 @@ pub fn extract_annotations(comments: &[Comment], file_path: &str) -> Vec<Annotat
                 line: comment.line,
                 kind: CheckKind::All { pattern },
                 description,
+            });
+            continue;
+        }
+
+        // Try [check:tag Name] before generic [check] regex
+        if let Some(caps) = TAG_RE.captures(&comment.text) {
+            let name = caps[1].to_string();
+            let first_line_desc = caps[2].trim().to_string();
+            let mut description = first_line_desc;
+            let mut prev_line = comment.line;
+
+            i += 1;
+            consume_continuation(comments, &mut i, &mut prev_line, &mut description);
+
+            annotations.push(Annotation {
+                file_path: file_path.to_string(),
+                line: comment.line,
+                kind: CheckKind::Tag { name },
+                description,
+            });
+            continue;
+        }
+
+        // Try check:ref before generic check regex
+        if let Some(caps) = REF_RE.captures(&comment.text) {
+            let name = caps[1].to_string();
+
+            i += 1;
+
+            annotations.push(Annotation {
+                file_path: file_path.to_string(),
+                line: comment.line,
+                kind: CheckKind::Ref { name },
+                description: String::new(),
             });
             continue;
         }
@@ -127,7 +177,7 @@ fn consume_continuation(
         if next.line != *prev_line + 1 {
             break;
         }
-        if CHECK_RE.is_match(&next.text) || ALL_RE.is_match(&next.text) {
+        if CHECK_RE.is_match(&next.text) || ALL_RE.is_match(&next.text) || TAG_RE.is_match(&next.text) || REF_RE.is_match(&next.text) {
             break;
         }
         if !description.is_empty() {
@@ -323,5 +373,118 @@ mod tests {
         let anns = extract_annotations(&comments, "foo.rs");
         assert_eq!(anns.len(), 1);
         assert_eq!(anns[0].line, 3);
+    }
+
+    #[test]
+    fn parse_tag_check() {
+        let comments = vec![comment(5, "[check:tag FooBar] Keep in sync")];
+        let anns = extract_annotations(&comments, "src/lib.rs");
+        assert_eq!(anns.len(), 1);
+        assert_eq!(
+            anns[0].kind,
+            CheckKind::Tag {
+                name: "FooBar".to_string()
+            }
+        );
+        assert_eq!(anns[0].description, "Keep in sync");
+        assert_eq!(anns[0].line, 5);
+    }
+
+    #[test]
+    fn parse_tag_multiline() {
+        let comments = vec![
+            comment(1, "[check:tag SyncPoint] These must match."),
+            comment(2, "Update both sides when changing either."),
+        ];
+        let anns = extract_annotations(&comments, "src/a.rs");
+        assert_eq!(anns.len(), 1);
+        assert_eq!(
+            anns[0].kind,
+            CheckKind::Tag {
+                name: "SyncPoint".to_string()
+            }
+        );
+        assert_eq!(
+            anns[0].description,
+            "These must match.\nUpdate both sides when changing either."
+        );
+    }
+
+    #[test]
+    fn tag_stops_continuation_at_new_check() {
+        let comments = vec![
+            comment(1, "[check:tag Foo] first"),
+            comment(2, "continuation"),
+            comment(3, "[check:tag Bar] second"),
+        ];
+        let anns = extract_annotations(&comments, "foo.rs");
+        assert_eq!(anns.len(), 2);
+        assert_eq!(
+            anns[0].kind,
+            CheckKind::Tag {
+                name: "Foo".to_string()
+            }
+        );
+        assert_eq!(anns[0].description, "first\ncontinuation");
+        assert_eq!(
+            anns[1].kind,
+            CheckKind::Tag {
+                name: "Bar".to_string()
+            }
+        );
+        assert_eq!(anns[1].description, "second");
+    }
+
+    #[test]
+    fn parse_ref_check() {
+        let comments = vec![comment(5, "[check:ref FooBar]")];
+        let anns = extract_annotations(&comments, "src/lib.rs");
+        assert_eq!(anns.len(), 1);
+        assert_eq!(
+            anns[0].kind,
+            CheckKind::Ref {
+                name: "FooBar".to_string()
+            }
+        );
+        assert_eq!(anns[0].description, "");
+        assert_eq!(anns[0].line, 5);
+    }
+
+    #[test]
+    fn ref_ignores_continuation() {
+        let comments = vec![
+            comment(1, "[check:ref Sync]"),
+            comment(2, "This comment is not part of the ref"),
+            comment(3, "[check] This is a separate check"),
+        ];
+        let anns = extract_annotations(&comments, "foo.rs");
+        assert_eq!(anns.len(), 2);
+        assert_eq!(
+            anns[0].kind,
+            CheckKind::Ref {
+                name: "Sync".to_string()
+            }
+        );
+        assert_eq!(anns[0].description, "");
+        assert_eq!(anns[1].kind, CheckKind::Check);
+        assert_eq!(anns[1].line, 3);
+    }
+
+    #[test]
+    fn ref_stops_tag_continuation() {
+        let comments = vec![
+            comment(1, "[check:tag Foo] description"),
+            comment(2, "continuation"),
+            comment(3, "[check:ref Bar]"),
+        ];
+        let anns = extract_annotations(&comments, "foo.rs");
+        assert_eq!(anns.len(), 2);
+        assert_eq!(anns[0].description, "description\ncontinuation");
+        assert_eq!(
+            anns[1].kind,
+            CheckKind::Ref {
+                name: "Bar".to_string()
+            }
+        );
     }
 }
