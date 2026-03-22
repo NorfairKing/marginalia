@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(repo: &Path, args: &[&str]) {
@@ -96,6 +96,96 @@ fn detects_staged_changes() {
     assert_eq!(files.len(), 1, "should detect staged changes");
     assert_eq!(files[0].path, "lib.rs");
     assert!(!files[0].hunks.is_empty());
+}
+
+fn marginalia_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_marginalia"))
+}
+
+fn run_marginalia(repo: &Path) -> std::process::Output {
+    Command::new(marginalia_bin())
+        .arg("--base")
+        .arg("main")
+        .current_dir(repo)
+        .output()
+        .expect("failed to run marginalia")
+}
+
+#[test]
+fn dead_pattern_in_marginalia_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Add a .marginalia file with a pattern that matches no tracked files
+    fs::write(
+        repo.join(".marginalia"),
+        "when src/**/*.go changes:\n  Check Go bindings.\n",
+    )
+    .unwrap();
+    git(repo, &["add", ".marginalia"]);
+    git(repo, &["commit", "-m", "add marginalia config"]);
+
+    // Make a change so there are changed files
+    fs::write(
+        repo.join("lib.rs"),
+        "// [check] Ensure bounds are checked\nfn process(x: usize) {\n    let y = x + 1;\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        !output.status.success(),
+        "marginalia should exit with error for dead pattern"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("matches no files"),
+        "stderr should mention the dead pattern: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("src/**/*.go"),
+        "stderr should include the pattern: {}",
+        stderr
+    );
+}
+
+#[test]
+fn dead_pattern_in_source_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_repo(repo);
+
+    // Add a file with [check:all] that has a pattern matching no tracked files.
+    // Use a pattern without ** to avoid a pre-existing bug where /* inside
+    // glob patterns gets parsed as a block comment opener in C-style languages.
+    fs::write(
+        repo.join("notes.rs"),
+        "// [check:all *.go] Update the docs\nfn foo() {}\n",
+    )
+    .unwrap();
+    git(repo, &["add", "notes.rs"]);
+    git(repo, &["commit", "-m", "add notes"]);
+
+    // Make a change so there are changed files
+    fs::write(
+        repo.join("lib.rs"),
+        "// [check] Ensure bounds are checked\nfn process(x: usize) {\n    let y = x + 1;\n}\n",
+    )
+    .unwrap();
+
+    let output = run_marginalia(repo);
+    assert!(
+        !output.status.success(),
+        "marginalia should exit with error for dead pattern in source file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("*.go"),
+        "stderr should include the pattern: {}",
+        stderr
+    );
 }
 
 #[test]

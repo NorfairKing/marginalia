@@ -57,6 +57,36 @@ pub fn active_annotations(
         .collect()
 }
 
+/// Validate that every [check:all] pattern matches at least one tracked file.
+///
+/// Returns a list of (annotation, pattern) pairs for patterns that match nothing.
+/// A pattern that matches no files in the entire repo is almost certainly stale or
+/// contains a typo.
+pub fn dead_patterns<'a>(
+    annotations: &'a [Annotation],
+    tracked_files: &[String],
+) -> Vec<(&'a Annotation, &'a str)> {
+    annotations
+        .iter()
+        .filter_map(|ann| {
+            if let CheckKind::All { pattern } = &ann.kind {
+                let pat = match glob::Pattern::new(pattern) {
+                    Ok(p) => p,
+                    Err(_) => return None, // invalid patterns are reported elsewhere
+                };
+                let has_match = tracked_files.iter().any(|f| pat.matches(f));
+                if !has_match {
+                    Some((ann, pattern.as_str()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Filter [check:all] annotations against the full list of changed files.
 pub fn active_all_annotations(
     annotations: &[Annotation],
@@ -313,6 +343,44 @@ fn other() {
         }];
         let active = active_all_annotations(&anns, &files);
         assert_eq!(active.len(), 0);
+    }
+
+    #[test]
+    fn dead_pattern_matches_nothing() {
+        let anns = vec![Annotation {
+            file_path: "README.md".to_string(),
+            line: 1,
+            kind: CheckKind::All {
+                pattern: "src/**/*.go".to_string(),
+            },
+            description: "update examples".to_string(),
+        }];
+        let tracked = vec![
+            "src/lib.rs".to_string(),
+            "src/main.rs".to_string(),
+            "README.md".to_string(),
+        ];
+        let dead = dead_patterns(&anns, &tracked);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].1, "src/**/*.go");
+    }
+
+    #[test]
+    fn live_pattern_matches_something() {
+        let anns = vec![Annotation {
+            file_path: "README.md".to_string(),
+            line: 1,
+            kind: CheckKind::All {
+                pattern: "src/**/*.rs".to_string(),
+            },
+            description: "update examples".to_string(),
+        }];
+        let tracked = vec![
+            "src/lib.rs".to_string(),
+            "src/main.rs".to_string(),
+        ];
+        let dead = dead_patterns(&anns, &tracked);
+        assert_eq!(dead.len(), 0);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use marginalia::annotations::extract_annotations;
 use marginalia::comment_tokens;
 use marginalia::comments::extract_comments;
 use marginalia::diff;
-use marginalia::matching::{active_all_annotations, active_annotations};
+use marginalia::matching::{active_all_annotations, active_annotations, dead_patterns};
 use marginalia::optparse::{Cli, OutputFormat};
 use marginalia::output::{render_json, render_text, CheckItem};
 use marginalia::scope;
@@ -11,6 +11,7 @@ use marginalia::watchfile;
 use git2::Repository;
 use std::fs;
 use std::path::Path;
+use std::process;
 
 fn main() {
     let cli = Cli::parse();
@@ -80,6 +81,20 @@ fn main() {
 
     // Phase 2: find [check:all] annotations
     let all_annotations = collect_all_annotations(repo_path);
+
+    // Validate that every pattern matches at least one tracked file.
+    let tracked = tracked_file_paths(repo_path);
+    let dead = dead_patterns(&all_annotations, &tracked);
+    if !dead.is_empty() {
+        for (ann, pattern) in &dead {
+            eprintln!(
+                "error: pattern '{}' in {}:{} matches no files in the repository",
+                pattern, ann.file_path, ann.line,
+            );
+        }
+        process::exit(1);
+    }
+
     let active = active_all_annotations(&all_annotations, &changed_files);
     all_checks.extend(active);
 
@@ -132,6 +147,23 @@ fn collect_all_annotations(repo_path: &Path) -> Vec<marginalia::annotations::Ann
     }
 
     annotations
+}
+
+/// Return all tracked file paths from the git index.
+fn tracked_file_paths(repo_path: &Path) -> Vec<String> {
+    let repo = match Repository::open(repo_path) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let index = match repo.index() {
+        Ok(i) => i,
+        Err(_) => return Vec::new(),
+    };
+
+    index
+        .iter()
+        .filter_map(|entry| std::str::from_utf8(&entry.path).ok().map(|p| p.to_string()))
+        .collect()
 }
 
 /// Search tracked files for the string `[check:all` using libgit2's index.
