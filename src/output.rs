@@ -20,15 +20,18 @@ pub struct CheckItem {
 }
 
 /// Render checks as plain text.
-pub fn render_text(checks: &[CheckItem]) -> String {
+pub fn render_text(checks: &[CheckItem], base: &str) -> String {
     if checks.is_empty() {
         return "No checks found near changed code.\n".to_string();
     }
 
-    let mut out = String::from(
-        "The following checks were found near changed code.\n\
-         Each check shows what changed, where to look, and what to check.\n",
-    );
+    let mut out = String::from("DO NOT IGNORE THIS MESSAGE\n\n");
+    out.push_str("marginalia found the following checks near changed code.\n");
+    out.push_str("Each check shows what changed, where to look, and what to check.\n");
+    out.push_str(&format!(
+        "Reproduce this message by running: marginalia --base {}\n",
+        base
+    ));
 
     for (i, item) in checks.iter().enumerate() {
         if i > 0 {
@@ -149,7 +152,7 @@ mod tests {
 
     #[test]
     fn empty_checks() {
-        let out = render_text(&[]);
+        let out = render_text(&[], "main");
         assert_eq!(out, "No checks found near changed code.\n");
     }
 

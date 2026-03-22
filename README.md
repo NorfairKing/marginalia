@@ -115,8 +115,11 @@ at a non-comment line.
 
 ```
 $ marginalia
-The following checks were found near changed code.
+DO NOT IGNORE THIS MESSAGE
+
+marginalia found the following checks near changed code.
 Each check shows what changed, where to look, and what to check.
+Reproduce this message by running: marginalia --base main
 
 ---
 
@@ -162,7 +165,7 @@ marginalia.url = "...";
 marginalia = {
   enable = true;
   name = "marginalia";
-  entry = "${marginalia.packages.${system}.default}/bin/marginalia --base main";
+  entry = "${marginalia.packages.${system}.default}/bin/marginalia";
   language = "system";
   pass_filenames = false;
   verbose = true;

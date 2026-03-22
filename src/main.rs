@@ -84,7 +84,7 @@ fn main() {
     all_checks.extend(active);
 
     let output = match cli.format {
-        OutputFormat::Text => render_text(&all_checks),
+        OutputFormat::Text => render_text(&all_checks, &base),
         OutputFormat::Json => render_json(&all_checks),
     };
 

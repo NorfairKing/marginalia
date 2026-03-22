@@ -6,7 +6,7 @@ use std::path::Path;
 
 fn golden_test(name: &str, checks: Vec<CheckItem>) {
     let golden_path = Path::new("tests/golden").join(format!("{}.txt", name));
-    let actual = render_text(&checks);
+    let actual = render_text(&checks, "main");
 
     if std::env::var("GOLDEN_RESET").is_ok() {
         fs::write(&golden_path, &actual).unwrap();
