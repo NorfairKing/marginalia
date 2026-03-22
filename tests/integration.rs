@@ -422,3 +422,79 @@ fn markdown_html_comments() {
         }
     );
 }
+
+#[test]
+fn hamlet_line_comments() {
+    let tokens = marginalia::comment_tokens("hamlet").unwrap();
+    let source = "$# [check:tag PrivacyPolicy] Check the privacy policy page.\n<div .block>\n  <h2>Privacy Policy\n";
+    let comments = marginalia::comments::extract_comments(source, &tokens);
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].line, 1);
+    let anns = marginalia::annotations::extract_annotations(&comments, "privacy.hamlet");
+    assert_eq!(anns.len(), 1);
+    assert_eq!(
+        anns[0].kind,
+        marginalia::annotations::CheckKind::Tag {
+            name: "PrivacyPolicy".to_string()
+        }
+    );
+    assert_eq!(anns[0].description, "Check the privacy policy page.");
+}
+
+#[test]
+fn hamlet_does_not_use_html_comments() {
+    let tokens = marginalia::comment_tokens("hamlet").unwrap();
+    // HTML comments in hamlet are output verbatim, not stripped — they are not comment syntax.
+    let source = "<!-- [check] This should not be found -->\n$# [check] This should be found\n";
+    let comments = marginalia::comments::extract_comments(source, &tokens);
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].line, 2);
+    assert_eq!(comments[0].text, "[check] This should be found");
+}
+
+#[test]
+fn cassius_block_comments() {
+    let tokens = marginalia::comment_tokens("cassius").unwrap();
+    let source = "/* [check:tag Branding] Check the branding colors. */\nbody\n  color: #333\n";
+    let comments = marginalia::comments::extract_comments(source, &tokens);
+    assert_eq!(comments.len(), 1);
+    let anns = marginalia::annotations::extract_annotations(&comments, "style.cassius");
+    assert_eq!(anns.len(), 1);
+    assert_eq!(
+        anns[0].kind,
+        marginalia::annotations::CheckKind::Tag {
+            name: "Branding".to_string()
+        }
+    );
+}
+
+#[test]
+fn lucius_block_comments() {
+    let tokens = marginalia::comment_tokens("lucius").unwrap();
+    let source = "/* [check:ref Branding] */\nbody {\n  color: #333;\n}\n";
+    let comments = marginalia::comments::extract_comments(source, &tokens);
+    assert_eq!(comments.len(), 1);
+    let anns = marginalia::annotations::extract_annotations(&comments, "style.lucius");
+    assert_eq!(anns.len(), 1);
+    assert_eq!(
+        anns[0].kind,
+        marginalia::annotations::CheckKind::Ref {
+            name: "Branding".to_string()
+        }
+    );
+}
+
+#[test]
+fn julius_line_and_block_comments() {
+    let tokens = marginalia::comment_tokens("julius").unwrap();
+    let source = "// [check] Test the JS behavior in all browsers.\nfunction init() {}\n";
+    let comments = marginalia::comments::extract_comments(source, &tokens);
+    assert_eq!(comments.len(), 1);
+    let anns = marginalia::annotations::extract_annotations(&comments, "app.julius");
+    assert_eq!(anns.len(), 1);
+    assert_eq!(anns[0].kind, marginalia::annotations::CheckKind::Check);
+    assert_eq!(
+        anns[0].description,
+        "Test the JS behavior in all browsers."
+    );
+}

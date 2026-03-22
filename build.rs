@@ -82,6 +82,10 @@ pub fn comment_tokens(extension: &str) -> Option<CommentTokens> {
             });
     }
 
+    // Hamlet (Shakespeare/Yesod) templates use $# for line comments.
+    // Tokei classifies .hamlet as HTML, but Yesod hamlet is a different language.
+    ext_map.insert("hamlet".to_string(), (vec!["$#".to_string()], vec![]));
+
     let mut extensions: Vec<_> = ext_map.keys().cloned().collect();
     extensions.sort();
 
