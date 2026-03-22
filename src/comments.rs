@@ -67,6 +67,14 @@ fn try_block_comment(
 
     for (open, close) in tokens.block {
         if let Some(open_pos) = line.find(open) {
+            // If a line comment token appears before the block open token,
+            // the block open is inside a line comment and should be ignored.
+            let inside_line_comment = tokens.line.iter().any(|prefix| {
+                line.find(prefix).is_some_and(|lc_pos| lc_pos < open_pos)
+            });
+            if inside_line_comment {
+                continue;
+            }
             let start_line = *i + 1;
             let after_open = &line[open_pos + open.len()..];
 
@@ -186,6 +194,14 @@ mod tests {
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[0].text, "[check] verify purity");
         assert_eq!(comments[1].text, "[check:file] check exports");
+    }
+
+    #[test]
+    fn glob_with_double_star_in_line_comment() {
+        let source = "// [check:all src/**/*.rs] Update examples\nfn foo() {}\n";
+        let comments = extract_comments(source, &c_tokens());
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].text, "[check:all src/**/*.rs] Update examples");
     }
 
     #[test]

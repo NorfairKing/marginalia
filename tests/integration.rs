@@ -158,11 +158,9 @@ fn dead_pattern_in_source_file() {
     setup_repo(repo);
 
     // Add a file with [check:all] that has a pattern matching no tracked files.
-    // Use a pattern without ** to avoid a pre-existing bug where /* inside
-    // glob patterns gets parsed as a block comment opener in C-style languages.
     fs::write(
         repo.join("notes.rs"),
-        "// [check:all *.go] Update the docs\nfn foo() {}\n",
+        "// [check:all nonexistent/**/*.xyz] Update the docs\nfn foo() {}\n",
     )
     .unwrap();
     git(repo, &["add", "notes.rs"]);
@@ -182,7 +180,7 @@ fn dead_pattern_in_source_file() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("*.go"),
+        stderr.contains("nonexistent/**/*.xyz"),
         "stderr should include the pattern: {}",
         stderr
     );
