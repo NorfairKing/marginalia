@@ -72,6 +72,38 @@ The pattern uses glob syntax:
 # They render differently in Outlook.
 ```
 
+### `[check:tag <name>]` and `[check:ref <name>]` - linked checks
+
+Inspired by [tagref](https://github.com/stepchowfun/tagref). When
+code near any `[check:tag]` or `[check:ref]` with a given name
+changes, marginalia produces a single check listing every location
+that shares that name.
+
+Use this to connect pieces of code that must stay in sync but live in
+different places — an encoder and its decoder, a schema and its
+migration, a struct definition and its serialisation.
+
+`[check:tag <name>]` carries a description (on the same line or
+continuation comments). `[check:ref <name>]` is a silent counterpart
+that participates in the group but has no description of its own.
+
+Every `[check:ref]` must have a matching `[check:tag]` (marginalia
+errors otherwise). A `[check:tag]` can exist alone.
+
+```rust
+// [check:tag WireFormat] Keep the encoder and decoder in sync.
+fn encode(msg: &Message) -> Vec<u8> {
+    ...
+}
+```
+
+```rust
+// [check:ref WireFormat]
+fn decode(bytes: &[u8]) -> Message {
+    ...
+}
+```
+
 ### `.marginalia` file
 
 <!-- [check:all src/watchfile.rs] Update this section if the .marginalia file syntax changes -->
@@ -104,10 +136,13 @@ default branch (`refs/remotes/origin/HEAD`), then trying `main` and
 
 ### Description syntax
 
-For all annotation types, the description follows the tag on the same
-line or on subsequent comment lines. No indentation is required.
-Blank comment lines are preserved as newlines. The description ends
-at a non-comment line.
+For all annotation types except `[check:ref]`, the description
+follows the tag on the same line or on subsequent comment lines. No
+indentation is required. Blank comment lines are preserved as
+newlines. The description ends at a non-comment line.
+
+`[check:ref]` carries no description — any comments after it are
+ignored.
 
 ## Usage
 
@@ -143,6 +178,15 @@ check docs/api.html
 
 The API docs are hand-written.
 Make sure they still still match the actual endpoints.
+
+---
+
+src/encoder.rs:15-20 changed (tag WireFormat)
+check:
+  src/encoder.rs:10
+  src/decoder.rs:22
+
+Keep the encoder and decoder in sync.
 ```
 
 ## Install
@@ -165,6 +209,7 @@ marginalia.url = "...";
 marginalia = {
   enable = true;
   name = "marginalia";
+  package = marginalia.packages.${system}.default;
   entry = "${marginalia.packages.${system}.default}/bin/marginalia";
   language = "system";
   pass_filenames = false;

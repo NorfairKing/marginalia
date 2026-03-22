@@ -48,6 +48,7 @@
             enable = true;
             name = "marginalia";
             description = "Show [check] annotations near changed lines";
+            package = marginalia;
             entry = "${marginalia}/bin/marginalia";
             language = "system";
             pass_filenames = false;
